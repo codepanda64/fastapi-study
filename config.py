@@ -1,0 +1,3 @@
+from config import TORTOISE_ORM
+
+TORTOISE_ORM = TORTOISE_ORM

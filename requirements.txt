@@ -1,0 +1,10 @@
+fastapi[all]==0.115.6
+uvicorn==0.34.0
+tortoise-orm==0.23.0
+aerich==0.8.1 
+psycopg2-binary==2.9.10
+asyncpg==0.30.0
+tomlkit==0.13.2
+pytest==8.3.4
+httpx==0.28.1
+asgi-lifespan==2.1.0
