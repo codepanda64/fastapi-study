@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Annotated, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, validator
 
 
 class NetworkBase(BaseModel):
@@ -30,30 +30,46 @@ class NetworkOut(NetworkBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-class PositionIn(BaseModel):
-    latitude: float
-    longitude: float
-    elevation: float | None = None
-    depth: float | None = None
-    is_current: bool = True
-    change_time: datetime
+def validate_geo_range(
+    value: float, name: str, min_value: float, max_value: float
+) -> float:
+    if not min_value <= value <= max_value:
+        raise ValueError(f"{name} must be between {min_value} and {max_value}")
+    return value
 
 
-class PositionOut(BaseModel):
+class PositionBase(BaseModel):
+    latitude: float = -999
+    longitude: float = -999
+    elevation: Optional[float] = None
+    depth: Optional[float] = None
+    changed_at: datetime
+
+
+class PositionIn(PositionBase):
+    elevation: Optional[float] = Field(default=None, nullable=True)
+    depth: Optional[float] = Field(default=None, nullable=True)
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("latitude")
+    def latitude_range(cls, value):
+        return validate_geo_range(value, "Latitude", -90, 90)
+
+    @field_validator("longitude")
+    def longitude_range(cls, value):
+        return validate_geo_range(value, "Longitude", -180, 180)
+
+
+class PositionOut(PositionBase):
     id: int
-    latitude: float
-    longitude: float
-    elevation: float | None = None
-    depth: float | None = None
-    is_current: bool
-    change_time: datetime
+    is_virtual: bool
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class StationIn(BaseModel):
+class StationSimpleIn(BaseModel):
     network_id: int
     code: str = Field(
         min_length=3,
@@ -61,9 +77,14 @@ class StationIn(BaseModel):
         description="Station code must be between 3 and 6 characters long",
         title="Station code",
     )
-    name: str
-    address: str | None = ""
-    position: PositionIn | None = None
+    name: Optional[str] = None
+    address: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StationIn(StationSimpleIn):
+    position: Optional[PositionIn] = None
 
 
 # Station 简化输出模型（不包含 network）
@@ -72,10 +93,6 @@ class StationSimpleOut(BaseModel):
     network_id: int
     code: str
     name: str
-    address: str | None = ""
-    current_position: Optional[PositionOut] = None
-    created_at: datetime
-    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -83,3 +100,9 @@ class StationSimpleOut(BaseModel):
 # Station 完整输出模型（包含 network）
 class StationOut(StationSimpleOut):
     network: NetworkOut
+    address: Optional[str] = None
+    position: Optional[PositionOut] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

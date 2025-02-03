@@ -42,8 +42,10 @@ class Settings(BaseSettings):
         "apps": {
             "models": {
                 "models": [
+                    "app.models.common",
                     "app.models.seismic",
                     "app.models.instruments",
+                    "app.models.histories",
                     "aerich.models",
                 ],
                 "default_connection": "default",
@@ -73,8 +75,10 @@ class Settings(BaseSettings):
         "apps": {
             "models": {
                 "models": [
+                    "app.models.common",
                     "app.models.seismic",
                     "app.models.instruments",
+                    "app.models.histories",
                     "aerich.models",
                 ],
                 "default_connection": "test",

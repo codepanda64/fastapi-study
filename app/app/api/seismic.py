@@ -1,7 +1,10 @@
+from enum import Enum
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from app.schemas.histories import StationPositionHistoryOut
+from app.models.histories import StationPositionHistory
 from app.models.seismic import Network, Position, Station
 
 from tortoise.query_utils import Prefetch
@@ -12,9 +15,9 @@ from app.schemas.seismic import (
     NetworkIn,
     NetworkOut,
     PositionIn,
-    PositionOut,
     StationIn,
     StationOut,
+    StationSimpleIn,
     StationSimpleOut,
 )
 
@@ -105,10 +108,7 @@ async def get_stations_query(
         stations = Station.all()
     # 统一处理预加载和排序
     stations = (
-        await stations.select_related("network")
-        .prefetch_related(
-            Prefetch("positions", queryset=Position.filter(is_current=True))
-        )
+        await stations.select_related("network", "position")
         .order_by(*order_by)
         .offset(skip)
         .limit(limit)
@@ -120,19 +120,13 @@ async def get_stations_query(
 @router.get("/stations", response_model=List[StationOut])
 @router.get("/networks/{network_id}/stations", response_model=List[StationOut])
 async def get_stations(stations: List[Station] = Depends(get_stations_query)):
-    for station in stations:
-        station.current_position = next(iter(station.positions), None)
-
     return stations
 
 
 async def get_station_or_404(station_id: int):
     station = (
         await Station.filter(id=station_id)
-        .select_related("network")
-        .prefetch_related(
-            Prefetch("positions", queryset=Position.filter(is_current=True))
-        )
+        .select_related("network", "position")
         .first()
     )
     if not station:
@@ -142,60 +136,112 @@ async def get_station_or_404(station_id: int):
 
 @router.get("/stations/{station_id}", response_model=StationOut)
 async def get_station(station: Station = Depends(get_station_or_404)):
-    station.current_position = next(iter(station.positions), None)
     return station
 
 
+class MethodType(str, Enum):
+    MAP = "map"
+    REAL = "real"
+
+    def __str__(self):
+        return self.value
+
+
 @router.post(
-    "/stations", response_model=StationSimpleOut, status_code=status.HTTP_201_CREATED
+    "/stations/", response_model=StationSimpleOut, status_code=status.HTTP_201_CREATED
 )
 @atomic()  # 使用事务确保数据一致性
-async def create_station(station: StationIn):
+async def create_station(
+    station_schema: StationIn,
+    method_type: Optional[MethodType] = None,
+):
+    # 参数预验证
+    if method_type and not station_schema.position:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Position is required with method type",
+        )
     try:
-        # 提取 station 和 position 数据
-        station_data = station.model_dump(exclude={"position"})  # 排除 position 字段
-
         # 创建 Station 对象
-        station_obj = await Station.create(**station_data)
-
-        if station.position:
-            position_data = station.position.model_dump()
-            # 创建 Position 对象并关联到 Station
-            position_obj = await Position.create(**position_data, station=station_obj)
-            # 将 position 赋值给 station 的 current_position 字段
-            station_obj.current_position = position_obj
-
-        # 返回完整的 StationSimpleOut 响应
-        return station_obj
-    except IntegrityError:
+        station_data = station_schema.model_dump(exclude={"position"})
+        station_obj = await Station.create(**station_data, position=None)
+    except IntegrityError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f'Station with code "{station.code}" already exists',
+            detail=f'Station with code "{station_schema.code}" already exists',
         )
+
+    # 不需要处理位置信息的情况
+    if not method_type:
+        return station_obj
+
+    # 处理位置信息创建
+    position_data = station_schema.position.model_dump()
+    position_data["is_virtual"] = method_type == MethodType.MAP
+
+    # 创建 Position 对象并关联到 Station
+    position_obj = await Position.create(**position_data)
+    station_obj.position = position_obj
+    await station_obj.save()
+
+    # 创建位置变更历史记录
+    await _update_position_history(station_obj, position_obj, is_new=True)
+    return station_obj
+
+
+def _is_same_position(position_obj: Position, position_dict: dict) -> bool:
+    """
+    判断两个位置是否相同
+    """
+    return (
+        abs(position_obj.latitude - position_dict["latitude"]) < 0.0001
+        and abs(position_obj.longitude - position_dict["longitude"]) < 0.0001
+    )
+
+
+async def _update_position(existing_position: Position, position_dict: dict):
+    if _is_same_position(existing_position, position_dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Position unchanged",
+        )
+    existing_position.update_from_dict(position_dict)
+    await existing_position.save()
+
+
+async def _update_position_history(station: Station, position: Position, is_new=False):
+    """
+    更新 Position 历史记录
+    """
+    if not is_new:
+        # 禁用当前的历史记录
+        await StationPositionHistory.filter(station=station, is_current=True).update(
+            is_current=False
+        )
+    # 创建新的历史记录
+    await StationPositionHistory.create(
+        station=station,
+        latitude=position.latitude,
+        longitude=position.longitude,
+        elevation=position.elevation,
+        depth=position.depth,
+        changed_at=position.changed_at,
+        is_current=True,
+    )
 
 
 @router.put("/stations/{station_id}", response_model=StationOut)
 @atomic()
 async def update_station(
-    new_station: StationIn, old_station: Station = Depends(get_station_or_404)
+    station_schema: StationSimpleIn, station_obj: Station = Depends(get_station_or_404)
 ):
-    update_data = new_station.model_dump(exclude={"position"})
-    for key, value in update_data.items():
-        setattr(old_station, key, value)
-
-    await old_station.save()
-
-    if new_station.position:
-        position_data = new_station.position.model_dump()
-        await Position.filter(station=old_station, is_current=True).bulk_update(
-            is_current=False
-        )
-
-        current_postion_obj = await Position.create(
-            **position_data, station=old_station, is_current=True
-        )
-        old_station.current_position = current_postion_obj
-    return old_station
+    """
+    更新 Station 对象
+    """
+    update_data = station_schema.model_dump()
+    station_obj.update_from_dict(update_data)
+    await station_obj.save()
+    return station_obj
 
 
 @router.delete("/stations/{station_id}")
@@ -210,72 +256,62 @@ async def delete_station(station_id: int):
     )
 
 
-@router.post(
-    "/stations/{station_id}/positions",
+@router.put(
+    "/stations/{station_id}/position",
     response_model=StationOut,
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_200_OK,
+    description="Update station position",
 )
-async def update_station_position(station_id: int, position: PositionIn):
-    station_obj = await Station.get_or_none(id=station_id).select_related("network")
+@atomic()
+async def station_set_position(
+    position_schema: PositionIn,
+    station_obj: Station = Depends(get_station_or_404),
+    method_type: MethodType = MethodType.REAL,
+):
+    position_data = position_schema.model_dump()
+    position_data["is_virtual"] = method_type == MethodType.MAP
+    if station_obj.position:
 
-    if not station_obj:
-        raise HTTPException(status_code=404, detail="Station not found")
-
-    position_obj = Position(**position.model_dump())
-
-    last_position_obj = await Position.get_or_none(
-        station_id=station_id, is_current=True
-    )
-    if last_position_obj:
-        if (
-            abs(last_position_obj.latitude - position_obj.latitude) < 0.0001
-            and abs(last_position_obj.longitude - position_obj.longitude) < 0.0001
-        ):
-            print("No change")
+        if method_type == MethodType.MAP:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Position has not changed",
+                detail="Only the first position can be set to the 'map' method",
             )
+        is_new = False
+        # 如果台站存在位置，更新位置
+        await _update_position(station_obj.position, position_data)
+    else:
+        is_new = True
+        # 如果台站不存在位置，创建位置
+        station_obj.position = await Position.create(**position_data)
+        await station_obj.save()
 
-        await Position.filter(station_id=station_id, is_current=True).update(
-            is_current=False
-        )
+    # 更新位置历史记录
+    await _update_position_history(station_obj, station_obj.position, is_new)
 
-    position_obj.station = station_obj
-    await position_obj.save()
-
-    station_obj.current_position = position_obj
     return station_obj
 
 
-@router.get("/stations/{station_id}/positions", response_model=List[PositionOut])
-async def get_station_positions(station_id: int):
+@router.get(
+    "/stations/{station_id}/position/histories",
+    response_model=List[StationPositionHistoryOut],
+)
+async def get_station_position_histories(station_id: int):
     station = await Station.get_or_none(id=station_id)
     if not station:
         raise HTTPException(status_code=404, detail="Station not found")
-    positions = await station.positions.order_by("-change_time").all()
-    return positions
+
+    position_histories = await station.position_histories.all()
+    return position_histories
 
 
-@router.patch("/positions/{position_id}/set_current", response_model=PositionOut)
-async def set_position_is_current(position_id: int):
-    position_obj = await Position.get_or_none(id=position_id)
-    if not position_obj:
-        raise HTTPException(status_code=404, detail="Position not found")
-    station = await position_obj.station
-    await Position.filter(station=station, is_current=True).update(is_current=False)
-    position_obj.is_current = True
-    await position_obj.save()
-    return position_obj
-
-
-@router.delete("/positions/{position_id}")
+@router.delete("/position/histories/{position_history_id}", status_code=204)
 async def delete_position(position_id: int):
-    position_obj = await Position.get_or_none(id=position_id)
-    if not position_obj:
-        raise HTTPException(status_code=404, detail="Position not found")
-    await position_obj.delete()
+    position_history_obj = await StationPositionHistory.get_or_none(id=position_id)
+    if not position_history_obj:
+        raise HTTPException(status_code=404, detail="Position history not found")
+    await position_history_obj.delete()
     return JSONResponse(
         status_code=204,
-        content={"message": "Position deleted"},
+        content={"message": "Position history deleted"},
     )

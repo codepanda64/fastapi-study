@@ -1,10 +1,19 @@
 from tortoise.models import Model
 from tortoise import fields
+from tortoise.exceptions import ValidationError
 
-from app.models.seismic import Station
+
+class InstrumentModel(Model):
+    id = fields.IntField(primary_key=True)
+    name = fields.CharField(max_length=255)
+    manufacturer = fields.CharField(max_length=255)
+    response_file = fields.OneToOneField("models.UploadedFile", null=True)
+
+    class Meta:
+        abstract = True
 
 
-class DataLogger(Model):
+class DataLogger(InstrumentModel):
     id = fields.IntField(primary_key=True)
     name = fields.CharField(max_length=255)
     sampling_rate = fields.FloatField()
@@ -14,7 +23,7 @@ class DataLogger(Model):
         table = "instruments_data_loggers"
 
 
-class Seismometer(Model):
+class Seismometer(InstrumentModel):
     id = fields.IntField(primary_key=True)
     name = fields.CharField(max_length=255)
     sensitivity = fields.FloatField()
@@ -75,11 +84,6 @@ class IntegratedSeismometerInstance(DeviceInstance):
     class Meta:
         unique_together = ("serial_number", "integrated_seismometer")
         table = "instruments_integrated_seismometer_instances"
-
-
-from tortoise.models import Model
-from tortoise import fields
-from tortoise.exceptions import ValidationError
 
 
 class ObservationSystem(Model):

@@ -22,6 +22,9 @@ class Station(Model):
     network = fields.ForeignKeyField("models.Network", related_name="stations")
     code = fields.CharField(max_length=6)
     name = fields.CharField(max_length=20)
+    position = fields.OneToOneField(
+        "models.Position", related_name="station", null=True, default=None
+    )
     address = fields.CharField(max_length=255, null=True, default=None)
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
@@ -37,13 +40,12 @@ class Station(Model):
 
 class Position(Model):
     id = fields.IntField(primary_key=True)
-    station = fields.ForeignKeyField("models.Station", related_name="positions")
     latitude = fields.FloatField()
     longitude = fields.FloatField()
     elevation = fields.FloatField(null=True)
     depth = fields.FloatField(null=True)
-    is_current = fields.BooleanField()
-    change_time = fields.DatetimeField()
+    is_virtual = fields.BooleanField()
+    changed_at = fields.DatetimeField()
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
 

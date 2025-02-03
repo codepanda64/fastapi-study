@@ -10,6 +10,16 @@ async def upgrade(db: BaseDBAsyncClient) -> str:
     "created_at" TIMESTAMPTZ NOT NULL  DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ NOT NULL  DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS "seismic_position" (
+    "id" SERIAL NOT NULL PRIMARY KEY,
+    "latitude" DOUBLE PRECISION NOT NULL,
+    "longitude" DOUBLE PRECISION NOT NULL,
+    "elevation" DOUBLE PRECISION,
+    "depth" DOUBLE PRECISION,
+    "changed_at" TIMESTAMPTZ NOT NULL,
+    "created_at" TIMESTAMPTZ NOT NULL  DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ NOT NULL  DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS "seismic_station" (
     "id" SERIAL NOT NULL PRIMARY KEY,
     "code" VARCHAR(6) NOT NULL,
@@ -18,19 +28,8 @@ CREATE TABLE IF NOT EXISTS "seismic_station" (
     "created_at" TIMESTAMPTZ NOT NULL  DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ NOT NULL  DEFAULT CURRENT_TIMESTAMP,
     "network_id" INT NOT NULL REFERENCES "seismic_network" ("id") ON DELETE CASCADE,
+    "position_id" INT  UNIQUE REFERENCES "seismic_position" ("id") ON DELETE CASCADE,
     CONSTRAINT "uid_seismic_sta_network_3fc647" UNIQUE ("network_id", "code")
-);
-CREATE TABLE IF NOT EXISTS "seismic_position" (
-    "id" SERIAL NOT NULL PRIMARY KEY,
-    "latitude" DOUBLE PRECISION NOT NULL,
-    "longitude" DOUBLE PRECISION NOT NULL,
-    "elevation" DOUBLE PRECISION,
-    "depth" DOUBLE PRECISION,
-    "is_current" BOOL NOT NULL,
-    "change_time" TIMESTAMPTZ NOT NULL,
-    "created_at" TIMESTAMPTZ NOT NULL  DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ NOT NULL  DEFAULT CURRENT_TIMESTAMP,
-    "station_id" INT NOT NULL REFERENCES "seismic_station" ("id") ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS "instruments_data_loggers" (
     "id" SERIAL NOT NULL PRIMARY KEY,
